@@ -1,5 +1,9 @@
 # smbpasswd-web
 
+## Alternatives
+
+There is some more modern and complete alternatives to smbpasswd-web, see some forks. This is archived, no new development will be made.
+
 ## What is it?
 
 ***smbpasswd-web*** is a simple web interface to smbpasswd.
