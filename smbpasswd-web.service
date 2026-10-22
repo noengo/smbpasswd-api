@@ -1,9 +1,27 @@
 [Unit]
 Description=Web Daemon for changing Samba passwords
+After=network-online.target samba-ad-dc.service
+Wants=network-online.target
 
 [Service]
-ExecStart=/opt/smbpasswd-web/app.py server
+# Unprivileged account; password changes go through sudo (see sudoers.example)
+User=sambaweb
+Group=sambaweb
+ExecStart=/opt/smbpasswd-web/app.py server --ssl --samba-tool --sudo
 WorkingDirectory=/opt/smbpasswd-web
+Restart=on-failure
+UMask=0077
+
+# Hardening, limited to options compatible with sudo. With a non-root User=,
+# systemd silently enables NoNewPrivileges= for options such as PrivateDevices=,
+# ProtectKernel*=, RestrictAddressFamilies=, LockPersonality=, SystemCallFilter=,
+# which would make sudo fail. sudo's children (samba-tool) inherit these
+# restrictions too: ProtectSystem=full only makes /usr, /boot, /efi and /etc
+# read-only, so /var/lib/samba stays writable.
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectControlGroups=yes
 
 [Install]
 WantedBy=multi-user.target

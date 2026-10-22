@@ -1,0 +1,14 @@
+# /etc/sudoers.d/smbpasswd-web   (install with: visudo -f /etc/sudoers.d/smbpasswd-web)
+#
+# Lets the "sambaweb" service account run exactly one command as root, without a
+# password: "samba-tool user setpassword <username>", the username matching the
+# same rule as app.py. (The whole argument list is one regex; the comma must be
+# escaped as \, in sudoers.) The password is sent on stdin, never on the command line.
+#
+# Regular expressions in sudoers arguments need sudo >= 1.9.10
+# (Debian 12 "bookworm": 1.9.13, Debian 13 "trixie": 1.9.16). Check: sudo -V
+#
+# Using smbpasswd instead of samba-tool? Replace the command with:
+#   /usr/bin/smbpasswd ^-s [A-Za-z0-9_][A-Za-z0-9._-]{0\,63}$
+
+sambaweb ALL=(root) NOPASSWD: /usr/bin/samba-tool ^user setpassword [A-Za-z0-9_][A-Za-z0-9._-]{0\,63}$

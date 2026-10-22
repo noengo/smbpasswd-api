@@ -27,6 +27,14 @@ We use [`zxcvbn`](https://github.com/dropbox/zxcvbn) as password strength meter.
 
 You _MUST_ use this app over a SSL connection, otherwise, your user's password can be sniffed. You can run the embedded webserver using SSL, you just need to provide the certificate file(`--ssl-cert CERT_FILE`) and private key(`--ssl-key KEY_FILE`) with the flag `--ssl`.
 
+Security notes (v1.2.0):
+
+* Passwords are sent to `samba-tool`/`smbpasswd` on **stdin** (twice: new password + confirmation), never on the command line, so they don't show up in `ps` or in the sudo log.
+* Tokens are single-use, stored **hashed** (SHA-256) in `res/tokens` (mode 0600) and **expire** after `--token-ttl` hours (default 48). Generating a new token for a user revokes the previous one. Tokens from older versions (plaintext) are no longer valid: generate new ones.
+* The token is in the URL **fragment** (`https://host/#token`), which browsers never send to the server.
+* All front-end libraries are served locally from `static/vendor/` (no CDN), with a strict Content-Security-Policy and the usual security headers.
+* Run the service as an unprivileged user (e.g. `sambaweb`) with `--sudo`, and allow only the password command in sudoers: see `sudoers.example` and `smbpasswd-web.service`.
+
 ## Usage
 
 ```
@@ -54,6 +62,7 @@ Note 2: ~~Currently, the generated URL is sort of invalid, you must adapt the ou
 $ ./app.py server --help
 usage: app.py server [-h] [-a ADDRESS] [-p PORT] [-v] [--sudo] [--samba-tool]
                      [--ssl] [--ssl-cert SSL_CERT] [--ssl-key SSL_KEY]
+                     [--token-ttl TOKEN_TTL]
 
 optional arguments:
   -h, --help            show this help message and exit
@@ -66,6 +75,7 @@ optional arguments:
   --ssl                 Start webserver using SSL
   --ssl-cert SSL_CERT   SSL certificate to use (default: res/fullchain.pem)
   --ssl-key SSL_KEY     SSL certificate private key (default: res/privkey.pem)
+  --token-ttl TOKEN_TTL Validity of a token, in hours (default: 48)
 ```
 
 ### Token generation Mode
@@ -92,12 +102,10 @@ git clone git@github.com:0x3333/smbpasswd-web
 cd smbpasswd-web
 ```
 
-Create a user token:
+Create a user token (run it as the service user, or as root: the files stay owned by the owner of `res/`):
 ```bash
-./app.py gen-token USERNAME
-Token generated:
-
-http://yourhostname.local/?8b6ef13b556f189afa302ba74ead80f29a30448a2a50df03918f4c790955f2c8
+sudo -u sambaweb ./app.py gen-token --ssl USERNAME
+https://yourhostname.local/#8b6ef13b556f189afa302ba74ead80f29a30448a2a50df03918f4c790955f2c8
 ```
 Send this URL to your user(See note 2 in `Usage`).
 
@@ -109,7 +117,15 @@ Send this URL to your user(See note 2 in `Usage`).
 By default ***smbpasswd-web***  will bind to localhost:8443 when in SSL mode or localhost:8080 otherwise. Using a `nginx`(or alike) as a proxy is good advice. Also you can expose it in port 80 or 443 so the URL gets cleaner.
 
 ### Running as systemd service
-To run this server as a simple systemd service, copy the `smbpasswd-web.service` file to `/etc/systemd/system/` and modify the paths according to your needs. Then execute
+To run this server as a simple systemd service, copy the `smbpasswd-web.service` file to `/etc/systemd/system/` and modify the paths according to your needs. The unit runs as the unprivileged `sambaweb` user and uses sudo for the password change:
+```bash
+useradd --system --home-dir /opt/smbpasswd-web --shell /usr/sbin/nologin sambaweb
+mkdir -p /opt/smbpasswd-web/res
+chown -R sambaweb:sambaweb /opt/smbpasswd-web/res && chmod 700 /opt/smbpasswd-web/res
+# certificate and key in res/ (key: chmod 600, owned by sambaweb)
+visudo -f /etc/sudoers.d/smbpasswd-web    # content: see sudoers.example
+```
+Then execute
 ```bash
 systemctl daemon-reload
 systemctl start smbpasswd-web.service
