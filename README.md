@@ -26,7 +26,7 @@ We use [`zxcvbn`](https://github.com/dropbox/zxcvbn) as password strength meter.
 
 You _MUST_ use this app over a SSL connection, otherwise, your user's password can be sniffed. You can run the embedded webserver using SSL, you just need to provide the certificate file(`--ssl-cert CERT_FILE`) and private key(`--ssl-key KEY_FILE`) with the flag `--ssl`.
 
-Security notes (v1.2.0):
+Security notes (v2.0.0):
 
 * Passwords are sent to `samba-tool`/`smbpasswd` on **stdin** (twice: new password + confirmation), never on the command line, so they don't show up in `ps` or in the sudo log.
 * Tokens are single-use, stored **hashed** (SHA-256) in `res/tokens` (mode 0600) and **expire** after `--token-ttl` hours (default 24). Generating a new token for a user revokes the previous one. Tokens from older versions (plaintext) are no longer valid: generate new ones.
