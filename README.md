@@ -26,7 +26,7 @@ You _MUST_ use this app over a SSL connection, otherwise, your user's password c
 Security notes (v1.2.0):
 
 * Passwords are sent to `samba-tool`/`smbpasswd` on **stdin** (twice: new password + confirmation), never on the command line, so they don't show up in `ps` or in the sudo log.
-* Tokens are single-use, stored **hashed** (SHA-256) in `res/tokens` (mode 0600) and **expire** after `--token-ttl` hours (default 48). Generating a new token for a user revokes the previous one. Tokens from older versions (plaintext) are no longer valid: generate new ones.
+* Tokens are single-use, stored **hashed** (SHA-256) in `res/tokens` (mode 0600) and **expire** after `--token-ttl` hours (default 24). Generating a new token for a user revokes the previous one. Tokens from older versions (plaintext) are no longer valid: generate new ones.
 * The token is in the URL **fragment** (`https://host/#token`), which browsers never send to the server.
 * All front-end libraries are served locally from `static/vendor/` (no CDN), with a strict Content-Security-Policy and the usual security headers.
 * Connections are limited in total (`--max-conn`) and per client IP (`--max-conn-per-ip`), with a 15 s socket timeout. Behind a reverse proxy or NAT, all clients share one IP: raise `--max-conn-per-ip`, or enforce the per-client limit on the proxy.
@@ -76,7 +76,7 @@ optional arguments:
   --ssl                 Start webserver using SSL
   --ssl-cert SSL_CERT   SSL certificate to use (default: res/fullchain.pem)
   --ssl-key SSL_KEY     SSL certificate private key (default: res/privkey.pem)
-  --token-ttl TOKEN_TTL Validity of a token, in hours (max 8760) (default: 48)
+  --token-ttl TOKEN_TTL Validity of a token, in hours (max 8760) (default: 24)
   --max-conn MAX_CONN   Maximum number of simultaneous connections (default: 256)
   --max-conn-per-ip MAX_CONN_PER_IP
                         Maximum number of simultaneous connections per client IP

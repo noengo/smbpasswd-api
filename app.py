@@ -72,7 +72,7 @@ _DEFAULT_MAX_CONNECTIONS = 256
 _DEFAULT_MAX_CONNECTIONS_PER_IP = 8
 
 # Default validity of a token (hours) and accepted range for --token-ttl
-_DEFAULT_TOKEN_TTL_HOURS = 48
+_DEFAULT_TOKEN_TTL_HOURS = 24
 _MAX_TOKEN_TTL_HOURS = 24 * 365
 
 _MAX_PASSWORD_LENGTH = 256
