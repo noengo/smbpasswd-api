@@ -1,5 +1,8 @@
 # smbpasswd-web
 
+Security-hardened fork of [0x3333/smbpasswd-web](https://github.com/0x3333/smbpasswd-web) (archived), maintained at <https://github.com/noengo/smbpasswd-api>.
+Requires Python 3 (tested with 3.13 and 3.14), Linux/Unix.
+
 ## What is it?
 
 ***smbpasswd-web*** is a simple web interface to smbpasswd.
@@ -8,8 +11,8 @@ The only purpose is to allow a user to change its samba password using a webbrow
 
 ## Sneak peek
 
-![smbpasswd-web screenshot](https://github.com/0x3333/smbpasswd-web/blob/master/.github/smbpasswd-main.png)
-![smbpasswd-web screenshot ok](https://github.com/0x3333/smbpasswd-web/blob/master/.github/smbpasswd-ok.png)
+![smbpasswd-web screenshot](.github/smbpasswd-main.png)
+![smbpasswd-web screenshot ok](.github/smbpasswd-ok.png)
 
 ## How it works?
 
@@ -106,8 +109,8 @@ optional arguments:
 First, clone the repo:
 
 ```bash
-git clone git@github.com:0x3333/smbpasswd-web
-cd smbpasswd-web
+git clone https://github.com/noengo/smbpasswd-api.git
+cd smbpasswd-api
 ```
 
 Create a user token (run it as the service user, or as root: the files stay owned by the owner of `res/`):
@@ -127,10 +130,18 @@ By default ***smbpasswd-web***  will bind to localhost:8443 when in SSL mode or 
 ### Running as systemd service
 To run this server as a simple systemd service, copy the `smbpasswd-web.service` file to `/etc/systemd/system/` and modify the paths according to your needs. The unit runs as the unprivileged `sambaweb` user and uses sudo for the password change:
 ```bash
-useradd --system --home-dir /opt/smbpasswd-web --shell /usr/sbin/nologin sambaweb
+# Code: owned by root, NOT writable by the service account
+git clone https://github.com/noengo/smbpasswd-api.git /opt/smbpasswd-web
+chown -R root:root /opt/smbpasswd-web
+
+# Service account: no home directory, no shell
+useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin sambaweb
+
+# Only res/ (tokens, certificate, key) belongs to the service account
 mkdir -p /opt/smbpasswd-web/res
-chown -R sambaweb:sambaweb /opt/smbpasswd-web/res && chmod 700 /opt/smbpasswd-web/res
+chown sambaweb:sambaweb /opt/smbpasswd-web/res && chmod 700 /opt/smbpasswd-web/res
 # certificate and key in res/ (key: chmod 600, owned by sambaweb)
+
 visudo -f /etc/sudoers.d/smbpasswd-web    # content: see sudoers.example
 ```
 Then execute
@@ -140,6 +151,50 @@ systemctl start smbpasswd-web.service
 systemctl enable smbpasswd-web.service
 ```
 
+### Behind a reverse proxy
+
+Behind a reverse proxy, every connection comes from the proxy's IP, so the
+per-IP limit (`--max-conn-per-ip`, default 8) would be shared by all users:
+raise it in the systemd unit and enforce the per-client limits on the proxy.
+
+```
+ExecStart=/opt/smbpasswd-web/app.py server --ssl --samba-tool --sudo --max-conn-per-ip 256
+```
+
+Keep the default `-a localhost` when the proxy runs on the same host, so the app
+can't be reached without going through the proxy. Set HSTS on the proxy (it is
+the TLS endpoint browsers see), not with `--hsts-max-age`.
+
+Example with nginx:
+
+```nginx
+# in the http {} block
+limit_conn_zone $binary_remote_addr zone=smbpw_conn:10m;
+limit_req_zone  $binary_remote_addr zone=smbpw_api:10m rate=10r/m;
+
+server {
+    listen 443 ssl;
+    server_name passwd.example.com;
+    # ssl_certificate ...; ssl_certificate_key ...;
+    # add_header Strict-Transport-Security "max-age=31536000" always;
+
+    limit_conn smbpw_conn 8;
+
+    # The app uses a self-signed certificate? Verify it anyway:
+    # proxy_ssl_trusted_certificate /opt/smbpasswd-web/res/fullchain.pem;
+    # proxy_ssl_verify on;
+    # proxy_ssl_name localhost;   # must match the certificate CN/SAN
+
+    location /api/ {
+        limit_req zone=smbpw_api burst=10 nodelay;
+        proxy_pass https://127.0.0.1:8443;
+    }
+    location / {
+        proxy_pass https://127.0.0.1:8443;
+    }
+}
+```
+
 ### TODO
 
 Migrated to issues. PRs are welcome! :)
@@ -147,5 +202,10 @@ Migrated to issues. PRs are welcome! :)
 ## License
 
  *smbpasswd-web* is released under the MIT license. See LICENSE.
+ Original work by Tercio Gaudencio Filho; fork changes by noengo.
+
+Third-party files keep their own licenses: `static/vendor/*/LICENSE*`
+(jQuery, Bootstrap, SweetAlert2: MIT; Font Awesome: SIL OFL 1.1 fonts, MIT CSS)
+and `static/zxcvbn.LICENSE.txt` (zxcvbn: MIT).
 
 App icon by [icons8](https://icons8.com/).

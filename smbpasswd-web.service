@@ -8,6 +8,9 @@ Wants=network-online.target
 User=sambaweb
 Group=sambaweb
 ExecStart=/opt/smbpasswd-web/app.py server --ssl --samba-tool --sudo
+# Behind a reverse proxy all clients share the proxy's IP: raise the per-IP
+# limit here and enforce the per-client limits on the proxy (see README):
+#ExecStart=/opt/smbpasswd-web/app.py server --ssl --samba-tool --sudo --max-conn-per-ip 256
 WorkingDirectory=/opt/smbpasswd-web
 Restart=on-failure
 UMask=0077

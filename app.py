@@ -5,6 +5,9 @@ The only purpose is to allow a user to change its samba password using a webbrow
 no user adding, no machine account, nothing, plain simple changing a password.
 
 Requires Python >= 3.8, tested on 3.13 / 3.14. Unix only (uses fcntl).
+
+Fork of https://github.com/0x3333/smbpasswd-web maintained at
+https://github.com/noengo/smbpasswd-api
 """
 
 import argparse
@@ -35,10 +38,10 @@ from pathlib import Path
 
 __author__ = "Tercio Gaudencio FIlho"
 __copyright__ = "Copyright 2019, Tercio Gaudencio Filho"
-__credits__ = ["Tercio Gaudencio Filho"]
+__credits__ = ["Tercio Gaudencio Filho", "noengo"]
 __license__ = "MIT"
 __version__ = "1.2.0"
-__maintainer__ = "Tercio Gaudencio FIlho"
+__maintainer__ = "noengo"
 __email__ = "terciofilho [at] gmail.com"
 __status__ = "Production"
 
