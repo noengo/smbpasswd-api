@@ -15,7 +15,9 @@ import hashlib
 import hmac
 import http.server
 import json
+import math
 import os
+import pwd
 import re
 import secrets
 import socket
@@ -62,11 +64,16 @@ _MAX_BODY_SIZE = 64 * 1024
 # Socket timeout (seconds) for a client connection: TLS handshake, request, body
 _REQUEST_TIMEOUT = 15
 
-# Maximum number of connections handled at the same time
-_MAX_CONNECTIONS = 50
+# Maximum number of connections handled at the same time, in total and per
+# client IP. The per-IP limit is what stops one client from holding all the
+# slots (behind a reverse proxy every request has the proxy's IP: enforce the
+# per-client limit there instead, or raise --max-conn-per-ip).
+_DEFAULT_MAX_CONNECTIONS = 256
+_DEFAULT_MAX_CONNECTIONS_PER_IP = 8
 
-# Default validity of a token (hours)
+# Default validity of a token (hours) and accepted range for --token-ttl
 _DEFAULT_TOKEN_TTL_HOURS = 48
+_MAX_TOKEN_TTL_HOURS = 24 * 365
 
 _MAX_PASSWORD_LENGTH = 256
 
@@ -93,6 +100,9 @@ _use_sudo = False
 _use_samba_tool = False
 _verbose = False
 _token_ttl = _DEFAULT_TOKEN_TTL_HOURS * 3600
+# Strict-Transport-Security max-age in seconds; 0 = header not sent. HSTS applies
+# to the whole host name (every port), so it is opt-in (--hsts-max-age).
+_hsts_max_age = 0
 
 # In-process lock (request threads); _locked_tokens() adds an flock() so the
 # "gen-token" command and the running server never write the file at the same time.
@@ -139,13 +149,44 @@ def _prepare_storage():
     _RES_PATH.mkdir(mode=0o700, exist_ok=True)
     for path, mode in ((_RES_PATH, 0o700), (_TOKENS_FILE, 0o600), (_LOCK_FILE, 0o600)):
         try:
-            if stat.S_IMODE(path.stat().st_mode) & 0o077:
-                path.chmod(mode)
-        except FileNotFoundError:
-            pass
+            current = stat.S_IMODE(path.stat().st_mode)
+        except OSError:
+            continue  # missing, or not accessible: reported by _check_storage()
+        if not current & 0o077:
+            continue
+        try:
+            path.chmod(mode)
         except PermissionError:
             print(f"Warning: {path} is accessible by other users and can't be fixed "
                   f"(chmod {mode:o} it).", file=sys.stderr)
+
+
+def _check_storage():
+    """Fail fast, with a clear message, if the token files can't be used.
+
+    Typical cause: res/ created by root while the server runs as another user.
+    Without this check the server would start, then fail on every API call.
+    """
+    try:
+        fd = os.open(_LOCK_FILE, os.O_RDONLY | os.O_CREAT, 0o600)
+        try:
+            _chown_to_res_owner(fd)
+        finally:
+            os.close(fd)
+        if _TOKENS_FILE.exists():
+            with open(_TOKENS_FILE, "r+", encoding="utf-8"):
+                pass
+        fd, tmp_path = tempfile.mkstemp(dir=_RES_PATH, prefix=".tokens.")
+        os.close(fd)
+        os.unlink(tmp_path)
+    except OSError as exc:
+        try:
+            user = pwd.getpwuid(os.geteuid()).pw_name
+        except KeyError:
+            user = str(os.geteuid())
+        print(f"Error: user '{user}' can't read/write the token files in {_RES_PATH}: {exc}\n"
+              f"Fix: chown -R {user}: {_RES_PATH} && chmod 700 {_RES_PATH}", file=sys.stderr)
+        sys.exit(1)
 
 
 @contextlib.contextmanager
@@ -299,27 +340,55 @@ def _build_ssl_context(ssl_cert, ssl_key):
 class SmbpasswdHTTPServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, server_address, handler, is_ssl):
+    def __init__(self, server_address, handler, is_ssl,
+                 max_connections=_DEFAULT_MAX_CONNECTIONS,
+                 max_connections_per_ip=_DEFAULT_MAX_CONNECTIONS_PER_IP):
         super().__init__(server_address, handler)
         self.is_ssl = is_ssl
-        self._slots = threading.BoundedSemaphore(_MAX_CONNECTIONS)
+        self._max_connections = max_connections
+        self._max_connections_per_ip = max_connections_per_ip
+        self._conn_lock = threading.Lock()
+        self._conn_total = 0
+        self._conn_per_ip = {}
+
+    def _acquire_slot(self, ip):
+        with self._conn_lock:
+            if (self._conn_total >= self._max_connections
+                    or self._conn_per_ip.get(ip, 0) >= self._max_connections_per_ip):
+                return False
+            self._conn_total += 1
+            self._conn_per_ip[ip] = self._conn_per_ip.get(ip, 0) + 1
+            return True
+
+    def _release_slot(self, ip):
+        with self._conn_lock:
+            self._conn_total -= 1
+            count = self._conn_per_ip.get(ip, 0) - 1
+            if count > 0:
+                self._conn_per_ip[ip] = count
+            else:
+                self._conn_per_ip.pop(ip, None)
 
     def process_request(self, request, client_address):
-        # Limit the number of connections handled simultaneously
-        if not self._slots.acquire(blocking=False):
+        # Limit the connections handled simultaneously, in total and per client
+        # IP, so a single client can't hold every slot.
+        ip = client_address[0]
+        if not self._acquire_slot(ip):
+            if _verbose:
+                print(f"{ip}: connection limit reached, connection dropped", flush=True)
             self.shutdown_request(request)
             return
         try:
             super().process_request(request, client_address)
         except BaseException:
-            self._slots.release()
+            self._release_slot(ip)
             raise
 
     def process_request_thread(self, request, client_address):
         try:
             super().process_request_thread(request, client_address)
         finally:
-            self._slots.release()
+            self._release_slot(client_address[0])
 
     def handle_error(self, request, client_address):
         # Failed handshakes, timeouts and disconnects are routine (scanners,
@@ -332,7 +401,9 @@ class SmbpasswdHTTPServer(http.server.ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
-def _start_web_server(is_ssl, ssl_cert, ssl_key, address, port):
+def _start_web_server(is_ssl, ssl_cert, ssl_key, address, port,
+                      max_connections=_DEFAULT_MAX_CONNECTIONS,
+                      max_connections_per_ip=_DEFAULT_MAX_CONNECTIONS_PER_IP):
     context = None
     if is_ssl:
         ssl_cert = _resolve_path(ssl_cert)
@@ -352,7 +423,8 @@ def _start_web_server(is_ssl, ssl_cert, ssl_key, address, port):
     # Serve static files from the static folder without changing the working dir
     handler = functools.partial(SmbpasswdRequestHandler, directory=str(_STATIC_PATH))
 
-    httpd = SmbpasswdHTTPServer((address, port), handler, is_ssl)
+    httpd = SmbpasswdHTTPServer((address, port), handler, is_ssl,
+                                max_connections, max_connections_per_ip)
 
     if context is not None:
         # do_handshake_on_connect=False: the handshake is done in the request
@@ -388,8 +460,8 @@ class SmbpasswdRequestHandler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
         for name, value in _SECURITY_HEADERS:
             self.send_header(name, value)
-        if getattr(self.server, "is_ssl", False):
-            self.send_header("Strict-Transport-Security", "max-age=31536000")
+        if _hsts_max_age > 0 and getattr(self.server, "is_ssl", False):
+            self.send_header("Strict-Transport-Security", f"max-age={_hsts_max_age}")
         super().end_headers()
 
     def invalid_api_request(self):
@@ -528,6 +600,7 @@ def main():
     global _use_samba_tool
     global _verbose
     global _token_ttl
+    global _hsts_max_age
 
     parser = argparse.ArgumentParser(
         description="Web interface to change samba user's password", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -551,7 +624,19 @@ def main():
     parser_server.add_argument("--ssl-key", help="SSL certificate private key", default=_DEFAULT_SSL_KEY)
 
     parser_server.add_argument("--token-ttl", type=float, default=_DEFAULT_TOKEN_TTL_HOURS,
-                               help="Validity of a token, in hours")
+                               help=f"Validity of a token, in hours (max {_MAX_TOKEN_TTL_HOURS})")
+
+    parser_server.add_argument("--max-conn", type=int, default=_DEFAULT_MAX_CONNECTIONS,
+                               help="Maximum number of simultaneous connections")
+    parser_server.add_argument("--max-conn-per-ip", type=int, default=_DEFAULT_MAX_CONNECTIONS_PER_IP,
+                               help="Maximum number of simultaneous connections per client IP "
+                                    "(behind a reverse proxy all clients share the proxy's IP)")
+
+    parser_server.add_argument("--hsts-max-age", type=int, default=0,
+                               help="Send Strict-Transport-Security with this max-age (seconds) "
+                                    "in SSL mode; 0 = disabled. HSTS applies to every port of "
+                                    "the host name, enable it only if nothing on this host name "
+                                    "uses plain http")
 
     # Token command
     parser_token = subparsers.add_parser("gen-token", help="Generate a token to a username")
@@ -562,17 +647,34 @@ def main():
     # Parse arguments
     _args = parser.parse_args()
 
+    if _args.command not in ("server", "gen-token"):
+        parser.print_help()
+        sys.exit(1)
+
+    # Validate options before touching any file
+    if _args.command == "server":
+        ttl = _args.token_ttl
+        if not math.isfinite(ttl) or not 0 < ttl <= _MAX_TOKEN_TTL_HOURS:
+            parser.error(f"--token-ttl must be between 0 and {_MAX_TOKEN_TTL_HOURS} hours")
+        if _args.max_conn < 1 or _args.max_conn_per_ip < 1:
+            parser.error("--max-conn and --max-conn-per-ip must be at least 1")
+        if _args.hsts_max_age < 0:
+            parser.error("--hsts-max-age can't be negative")
+
     # Every file created from now on is private to the user running the app
     os.umask(0o077)
-    _prepare_storage()
+    try:
+        _prepare_storage()
+    except OSError as exc:
+        print(f"Error: can't create {_RES_PATH}: {exc}", file=sys.stderr)
+        sys.exit(1)
+    _check_storage()
 
     if _args.command == "server":
         # If we should print HTTP requests
         _verbose = _args.verbose
-
-        if _args.token_ttl <= 0:
-            parser.error("--token-ttl must be positive")
         _token_ttl = int(_args.token_ttl * 3600)
+        _hsts_max_age = _args.hsts_max_age
 
         port = _args.port
         if port is None:
@@ -580,12 +682,10 @@ def main():
 
         _use_sudo = _args.sudo
         _use_samba_tool = _args.samba_tool
-        _start_web_server(_args.ssl, _args.ssl_cert, _args.ssl_key, _args.address, port)
-    elif _args.command == "gen-token":
-        _generate_token(_args.username, _args.ssl, _args.fqdn)
+        _start_web_server(_args.ssl, _args.ssl_cert, _args.ssl_key, _args.address, port,
+                          _args.max_conn, _args.max_conn_per_ip)
     else:
-        parser.print_help()
-        sys.exit(1)
+        _generate_token(_args.username, _args.ssl, _args.fqdn)
 
 
 if __name__ == "__main__":

@@ -2,3 +2,5 @@
 res/tokens
 res/*.pem
 
+res/.tokens*
+__pycache__/

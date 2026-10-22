@@ -1,9 +1,5 @@
 # smbpasswd-web
 
-## Alternatives
-
-There is some more modern and complete alternatives to smbpasswd-web, see some forks. This is archived, no new development will be made.
-
 ## What is it?
 
 ***smbpasswd-web*** is a simple web interface to smbpasswd.
@@ -33,6 +29,9 @@ Security notes (v1.2.0):
 * Tokens are single-use, stored **hashed** (SHA-256) in `res/tokens` (mode 0600) and **expire** after `--token-ttl` hours (default 48). Generating a new token for a user revokes the previous one. Tokens from older versions (plaintext) are no longer valid: generate new ones.
 * The token is in the URL **fragment** (`https://host/#token`), which browsers never send to the server.
 * All front-end libraries are served locally from `static/vendor/` (no CDN), with a strict Content-Security-Policy and the usual security headers.
+* Connections are limited in total (`--max-conn`) and per client IP (`--max-conn-per-ip`), with a 15 s socket timeout. Behind a reverse proxy or NAT, all clients share one IP: raise `--max-conn-per-ip`, or enforce the per-client limit on the proxy.
+* HSTS is opt-in (`--hsts-max-age`): it applies to every port of the host name, so enable it only if nothing on that host name uses plain http.
+* The server refuses to start if it can't read/write the token files in `res/` (e.g. `res/` owned by root while the service runs as `sambaweb`), and prints the `chown` command to fix it.
 * Run the service as an unprivileged user (e.g. `sambaweb`) with `--sudo`, and allow only the password command in sudoers: see `sudoers.example` and `smbpasswd-web.service`.
 
 ## Usage
@@ -62,7 +61,9 @@ Note 2: ~~Currently, the generated URL is sort of invalid, you must adapt the ou
 $ ./app.py server --help
 usage: app.py server [-h] [-a ADDRESS] [-p PORT] [-v] [--sudo] [--samba-tool]
                      [--ssl] [--ssl-cert SSL_CERT] [--ssl-key SSL_KEY]
-                     [--token-ttl TOKEN_TTL]
+                     [--token-ttl TOKEN_TTL] [--max-conn MAX_CONN]
+                     [--max-conn-per-ip MAX_CONN_PER_IP]
+                     [--hsts-max-age HSTS_MAX_AGE]
 
 optional arguments:
   -h, --help            show this help message and exit
@@ -75,7 +76,14 @@ optional arguments:
   --ssl                 Start webserver using SSL
   --ssl-cert SSL_CERT   SSL certificate to use (default: res/fullchain.pem)
   --ssl-key SSL_KEY     SSL certificate private key (default: res/privkey.pem)
-  --token-ttl TOKEN_TTL Validity of a token, in hours (default: 48)
+  --token-ttl TOKEN_TTL Validity of a token, in hours (max 8760) (default: 48)
+  --max-conn MAX_CONN   Maximum number of simultaneous connections (default: 256)
+  --max-conn-per-ip MAX_CONN_PER_IP
+                        Maximum number of simultaneous connections per client IP
+                        (behind a reverse proxy all clients share the proxy's IP) (default: 8)
+  --hsts-max-age HSTS_MAX_AGE
+                        Send Strict-Transport-Security with this max-age (seconds) in SSL
+                        mode; 0 = disabled (default: 0)
 ```
 
 ### Token generation Mode
