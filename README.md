@@ -40,7 +40,7 @@ Security notes (v1.2.0):
 ## Usage
 
 ```
-$ ./app.py --help
+$ /usr/bin/python3 app.py --help
 usage: app.py [-h] {server,gen-token} ...
 
 Web interface to change samba user's password
@@ -61,7 +61,7 @@ Note 2: ~~Currently, the generated URL is sort of invalid, you must adapt the ou
 ### Server Mode
 
 ```
-$ ./app.py server --help
+$ /usr/bin/python3 app.py server --help
 usage: app.py server [-h] [-a ADDRESS] [-p PORT] [-v] [--sudo] [--samba-tool]
                      [--ssl] [--ssl-cert SSL_CERT] [--ssl-key SSL_KEY]
                      [--token-ttl TOKEN_TTL] [--max-conn MAX_CONN]
@@ -92,7 +92,7 @@ optional arguments:
 ### Token generation Mode
 
 ```
-$ ./app.py gen-token --help
+$ /usr/bin/python3 app.py gen-token --help
 usage: app.py gen-token [-h] [--ssl] [--fqdn FQDN] USERNAME
 
 positional arguments:
@@ -115,14 +115,14 @@ cd smbpasswd-api
 
 Create a user token (run it as the service user, or as root: the files stay owned by the owner of `res/`):
 ```bash
-sudo -u sambaweb ./app.py gen-token --ssl USERNAME
+sudo -u sambaweb /usr/bin/python3 app.py gen-token --ssl USERNAME
 https://yourhostname.local/#8b6ef13b556f189afa302ba74ead80f29a30448a2a50df03918f4c790955f2c8
 ```
 Send this URL to your user(See note 2 in `Usage`).
 
 * Start the web server in SSL mode(Cert and Key in default location):
 ```bash
-./app.py server --ssl
+/usr/bin/python3 app.py server --ssl
 ```
 
 By default ***smbpasswd-web***  will bind to localhost:8443 when in SSL mode or localhost:8080 otherwise. Using a `nginx`(or alike) as a proxy is good advice. Also you can expose it in port 80 or 443 so the URL gets cleaner.
@@ -133,6 +133,7 @@ To run this server as a simple systemd service, copy the `smbpasswd-web.service`
 # Code: owned by root, NOT writable by the service account
 git clone https://github.com/noengo/smbpasswd-api.git /opt/smbpasswd-web
 chown -R root:root /opt/smbpasswd-web
+chmod -R u=rwX,go=rX /opt/smbpasswd-web   # readable by sambaweb, not writable
 
 # Service account: no home directory, no shell
 useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin sambaweb
@@ -158,7 +159,7 @@ per-IP limit (`--max-conn-per-ip`, default 8) would be shared by all users:
 raise it in the systemd unit and enforce the per-client limits on the proxy.
 
 ```
-ExecStart=/opt/smbpasswd-web/app.py server --ssl --samba-tool --sudo --max-conn-per-ip 256
+ExecStart=/usr/bin/python3 /opt/smbpasswd-web/app.py server --ssl --samba-tool --sudo --max-conn-per-ip 256
 ```
 
 Keep the default `-a localhost` when the proxy runs on the same host, so the app
